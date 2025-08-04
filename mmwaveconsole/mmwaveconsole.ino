@@ -23,10 +23,11 @@
 #include <SPIFFS.h>
 #include <FS.h>
 #include "wifi_credentials.h"  // WiFi credentials in separate file
+#include "user_config.h"      // User-modifiable settings
 
-static constexpr uint32_t BAUD_RATE = 256000UL;
-static constexpr uint8_t RADAR_RX = 18;  // RX pin on ESP32 → TX of radar
-static constexpr uint8_t RADAR_TX = 17;  // TX pin on ESP32 → RX of radar (optional)
+static constexpr uint32_t BAUD_RATE = CONFIG_BAUD_RATE;
+static constexpr uint8_t RADAR_RX = CONFIG_RADAR_RX_PIN;  // RX pin on ESP32 → TX of radar
+static constexpr uint8_t RADAR_TX = CONFIG_RADAR_TX_PIN;  // TX pin on ESP32 → RX of radar (optional)
 
 // Store command arrays in flash memory to save RAM
 static const uint8_t CMD_MULTI[12] PROGMEM = {
@@ -55,18 +56,18 @@ PerformanceConfig perfConfig;
 // Comprehensive configuration management
 struct RadarConfig {
   // Target detection settings
-  bool multiTarget = false;
-  uint8_t maxTargets = 3;
-  bool enableFiltering = false;
+  bool multiTarget = CONFIG_MULTI_TARGET;
+  uint8_t maxTargets = CONFIG_MAX_TARGETS;
+  bool enableFiltering = CONFIG_ENABLE_FILTERING;
   
   // Output control
-  uint16_t outputIntervalMs = 100;  // 10Hz default
+  uint16_t outputIntervalMs = CONFIG_OUTPUT_INTERVAL_MS;  // 10Hz default
   bool enableVerboseOutput = true;
   bool enableStatistics = true;
   uint16_t statisticsIntervalMs = 10000; // 10 seconds
   
   // Performance settings
-  uint16_t maxFramesPerCycle = 5;
+  uint16_t maxFramesPerCycle = CONFIG_MAX_FRAMES_PER_CYCLE;
   uint16_t frameTimeoutMs = 100;
   
   // Validation settings
@@ -208,11 +209,11 @@ WebServer server(80);
 struct WiFiConfig {
   const char* ssid = WIFI_SSID;           // From wifi_credentials.h
   const char* password = WIFI_PASSWORD;   // From wifi_credentials.h
-  bool enableWebServer = true;
-  uint16_t serverPort = 80;
+  bool enableWebServer = CONFIG_ENABLE_WEB_SERVER;
+  uint16_t serverPort = CONFIG_WEB_SERVER_PORT;
   unsigned long lastDataUpdate = 0;
-  int connectionTimeout = WIFI_CONNECTION_TIMEOUT;
-  bool enableReconnect = ENABLE_WIFI_RECONNECT;
+  int connectionTimeout = CONFIG_WIFI_CONNECTION_TIMEOUT;
+  bool enableReconnect = CONFIG_ENABLE_WIFI_RECONNECT;
   
   void printStatus() {
     if (WiFi.status() == WL_CONNECTED) {
@@ -246,12 +247,12 @@ struct RadarData {
 
 // Data logging system
 struct DataLogger {
-  bool enableLogging = false;
+  bool enableLogging = CONFIG_ENABLE_LOGGING;
   String logFileName = "/radar_log.txt";
   String configFileName = "/radar_config.json";
   unsigned long lastLogTime = 0;
-  uint16_t logIntervalMs = 5000; // Log every 5 seconds
-  uint32_t maxLogFileSize = 1024 * 100; // 100KB max
+  uint16_t logIntervalMs = CONFIG_LOG_INTERVAL_MS; // Log every 5 seconds
+  uint32_t maxLogFileSize = CONFIG_MAX_LOG_FILE_SIZE; // 100KB max
   uint16_t logEntryCount = 0;
   
   bool begin() {
