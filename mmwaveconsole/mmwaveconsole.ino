@@ -16,6 +16,8 @@
 
 //#define MULTI_TARGET
 
+#define RAW_FRAME_CAPTURE
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -595,8 +597,12 @@ void handleRoot() {
   // Status cards
   html += F("<div class='card stat-card'>");
   html += F("<div class='stat-icon'><i class='fas fa-bullseye'></i></div>");
-  html += F("<div class='stat-value' id='targetCount'>0</div>");
+  html += F("<div class='stat-value' id='totalTargets'>0</div>");
+  html += F("<div class='stat-label'>Total Targets</div>");
+  html += F("<div class='stat-value' id='activeTargets'>0</div>");
   html += F("<div class='stat-label'>Active Targets</div>");
+  html += F("<div class='stat-value' id='inactiveTargets'>0</div>");
+  html += F("<div class='stat-label'>Inactive Targets</div>");
   html += F("</div>");
   
   html += F("<div class='card stat-card'>");
@@ -686,12 +692,13 @@ void handleRoot() {
 
   // Draw radar visualization
   html += F("function drawRadar() {");
-  html += F("  const centerX = canvas.width / 2;");
-  html += F("  const centerY = canvas.height - 50;");
-  html += F("  const maxRange = 300;");
-  html += F("  const scale = (canvas.height - 100) / maxRange;");
-  html += F("  canvas.width = canvas.offsetWidth || 400;");
-  html += F("  canvas.height = canvas.offsetHeight || 400;");
+  html += F("  // Ensure canvas dimensions are updated before calculations\n");
+  html += F("  canvas.width = canvas.offsetWidth || 400;\n");
+  html += F("  canvas.height = canvas.offsetHeight || 400;\n");
+  html += F("  const centerX = canvas.width / 2;\n");
+  html += F("  const centerY = canvas.height - 50;\n");
+  html += F("  const maxRange = 300;\n");
+  html += F("  const scale = (canvas.height - 100) / maxRange;\n");
   html += F("  ctx.fillStyle = '#1a1a2e';");
   html += F("  ctx.fillRect(0, 0, canvas.width, canvas.height);");
   html += F("  ctx.strokeStyle = '#333';");
@@ -748,10 +755,15 @@ void handleRoot() {
   
   // Update display elements
   html += F("function updateDisplay(data) {");
-  html += F("  document.getElementById('targetCount').textContent = data.targetCount || 0;");
-  html += F("  const successRate = data.stats ? Math.round((data.stats.validFrames / (data.stats.validFrames + data.stats.droppedFrames)) * 100) : 0;");
-  html += F("  document.getElementById('successRate').textContent = successRate + '%';");
-  html += F("  document.getElementById('frameCount').textContent = data.stats ? data.stats.validFrames : 0;");
+  html += F("  const totalTargets = (data.config && data.config.multiTarget) ? 3 : 1;\n");
+  html += F("  const activeTargets = data.targetCount || 0;\n");
+  html += F("  const inactiveTargets = Math.max(totalTargets - activeTargets, 0);\n");
+  html += F("  document.getElementById('totalTargets').textContent = totalTargets;\n");
+  html += F("  document.getElementById('activeTargets').textContent = activeTargets;\n");
+  html += F("  document.getElementById('inactiveTargets').textContent = inactiveTargets;\n");
+  html += F("  const successRate = data.stats ? Math.round((data.stats.validFrames / (data.stats.validFrames + data.stats.droppedFrames)) * 100) : 0;\n");
+  html += F("  document.getElementById('successRate').textContent = successRate + '%';\n");
+  html += F("  document.getElementById('frameCount').textContent = data.stats ? data.stats.validFrames : 0;\n");
   html += F("  updateTargetList(data.targets || []);");
   html += F("  updateSystemStatus(data.system || {});");
   html += F("  updateConfigToggles(data.config || {});");
@@ -1015,14 +1027,14 @@ void parseFrame(const uint8_t f[30]) {
     num = config.maxTargets;
   }
   
-  if (config.enableVerboseOutput) {
+  /*if (config.enableVerboseOutput) {
     if (config.multiTarget) {
       Serial.print(F("Targets: "));
       Serial.println(num);
     } else {
       Serial.println(F("Single Target Mode"));
     }
-  }
+  }*/
 
   // Process targets and filter based on mode
   for (uint8_t i = 0; i < num; i++) {
@@ -1038,43 +1050,20 @@ void parseFrame(const uint8_t f[30]) {
     uint16_t rawS = uint16_t(f[base + 4]) | uint16_t(f[base + 5]) << 8;
     uint16_t rawD = uint16_t(f[base + 6]) | uint16_t(f[base + 7]) << 8;
 
-    int16_t x = int16_t(rawX) - 0x0200;
-    int16_t y = int16_t(rawY) - 0x8000;
+    // X axis uses 0x0200 (512) as centre, Y axis uses 0x8000 baseline for sign.
+    int16_t x = int16_t(rawX - 0x0200);   // centre 0x0200
+    int16_t y = int16_t(rawY - 0x8000);   // baseline 0x8000
     
     // Fix speed overflow: RD-03D uses 32768 as zero baseline
     // Based on debug output: rawS=32784 should be small negative speed
-    int16_t spd;
-    
-    // Enhanced debug output to understand the encoding
-    if (config.enableVerboseOutput && (rawS > 32760 && rawS < 32800)) {
-      Serial.printf("[SPEED_DEBUG] rawS=%u (0x%04X)\n", rawS, rawS);
-    }
-    
-    if (rawS <= 16) {
-      // Values 0-16: Very small positive speeds or zero
-      spd = rawS;
-    } else if (rawS < 32768) {
-      // Values 17-32767: Positive speeds
-      spd = rawS - 16;
-    } else {
-      // Values >= 32768: Negative speeds with 32768 as zero baseline
-      // rawS=32768 -> spd=0, rawS=32784 -> spd=-16, etc.
-      int32_t temp = 32768 - (int32_t)rawS;
-      
-      // Clamp to reasonable range to prevent extreme values
-      if (temp < -1000) {
-        spd = -1000;
-      } else if (temp > 1000) {
-        spd = 1000;
-      } else {
-        spd = (int16_t)temp;
-      }
-    }
+    // Decode speed around 0x8000 baseline: symmetric cm/s
+    int16_t spd = (rawS < 0x8000) ? int16_t(rawS)          // +1..+32767
+                                   : int16_t(0x8000 - rawS); // 0x8001→-1
     
     // Debug output for problematic speed values
-    if (config.enableVerboseOutput && (rawS > 32000 || spd > 1000 || spd < -1000)) {
-      Serial.printf("[DEBUG] rawS=%u (0x%04X), final_spd=%d\n", rawS, rawS, spd);
-    }
+    //if (config.enableVerboseOutput && (rawS > 32000 || spd > 1000 || spd < -1000)) {
+    //  Serial.printf("[DEBUG] rawS=%u (0x%04X), final_spd=%d\n", rawS, rawS, spd);
+    //}
 
     float dist_cm = sqrt(double(x * x + y * y)) * config.distanceScale;
     
@@ -1211,9 +1200,39 @@ void loop() {
     if (parser.syncing) {
       if (parser.idx == 0 && (ch == 0xAA || ch == 0xAD)) {
         parser.buf[parser.idx++] = ch;
+#if 0 /* old RAW capture disabled */
+        static uint8_t rawFrame[30];
+        static uint8_t rawIdx = 0;
+        rawFrame[rawIdx++] = ch;
+        if (rawIdx == 30) {
+          Serial.print(F("RAW: "));
+          for (uint8_t i = 0; i < 30; i++) {
+            if (rawFrame[i] < 0x10) Serial.print('0');
+            Serial.print(rawFrame[i], HEX);
+            Serial.print(' ');
+          }
+          Serial.println();
+          rawIdx = 0;
+        }
+#endif
         parser.startFrame();
       } else if (parser.idx == 1 && ch == 0xFF) {
         parser.buf[parser.idx++] = ch;
+#if 0 /* old RAW capture disabled */
+        static uint8_t rawFrame[30];
+        static uint8_t rawIdx = 0;
+        rawFrame[rawIdx++] = ch;
+        if (rawIdx == 30) {
+          Serial.print(F("RAW: "));
+          for (uint8_t i = 0; i < 30; i++) {
+            if (rawFrame[i] < 0x10) Serial.print('0');
+            Serial.print(rawFrame[i], HEX);
+            Serial.print(' ');
+          }
+          Serial.println();
+          rawIdx = 0;
+        }
+#endif
         parser.syncing = false;
       } else {
         parser.idx = 0;
@@ -1221,7 +1240,32 @@ void loop() {
       }
     } else {
       parser.buf[parser.idx++] = ch;
+#if 0 /* old RAW capture disabled */
+        static uint8_t rawFrame[30];
+        static uint8_t rawIdx = 0;
+        rawFrame[rawIdx++] = ch;
+        if (rawIdx == 30) {
+          Serial.print(F("RAW: "));
+          for (uint8_t i = 0; i < 30; i++) {
+            if (rawFrame[i] < 0x10) Serial.print('0');
+            Serial.print(rawFrame[i], HEX);
+            Serial.print(' ');
+          }
+          Serial.println();
+          rawIdx = 0;
+        }
+#endif
       if (parser.idx == 30) {
+#ifdef RAW_FRAME_CAPTURE
+        Serial.print(F("RAW: "));
+        for (uint8_t i = 0; i < 30; i++) {
+          uint8_t b = parser.buf[i];
+          if (b < 0x10) Serial.print('0');
+          Serial.print(b, HEX);
+          Serial.print(' ');
+        }
+        Serial.println();
+#endif
         parseFrame(parser.buf);
         parser.reset();
         perfConfig.processedFramesThisCycle++;
@@ -1248,8 +1292,8 @@ void loop() {
     uint32_t totalFrames = parser.validFrames + parser.droppedFrames;
     if (totalFrames > 0) {
       float successRate = (float)parser.validFrames / totalFrames * 100.0;
-      Serial.printf("Frame stats: Valid=%lu, Dropped=%lu, Success=%.1f%%\n", 
-                    parser.validFrames, parser.droppedFrames, successRate);
+      //Serial.printf("Frame stats: Valid=%lu, Dropped=%lu, Success=%.1f%%\n", 
+      //              parser.validFrames, parser.droppedFrames, successRate);
     }
     lastStatsTime = millis();
   }
