@@ -134,11 +134,12 @@ void parseFrame(const uint8_t f[30]) {
       targetActive = true;
       // Convert speed from cm/s to mph (1 cm/s = 0.0223694 mph)
       float speedMph = speed * 0.0223694;
-      Serial.println(speedMph, 2);  // Output with 2 decimal places
+      // Format as constant width: "  1.23 mph" or " 12.34 mph" or "123.45 mph"
+      Serial.printf("%6.2f mph\n", speedMph);
       return;  // Only process the first active target
     } else if (targetActive == true) {
       targetActive = false;
-      Serial.println(0.00, 2);
+      Serial.printf("%6.2f mph\n", 0.00);
     }
   }
 
